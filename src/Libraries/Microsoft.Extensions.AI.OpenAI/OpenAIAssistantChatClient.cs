@@ -1,4 +1,4 @@
-// Licensed to the .NET Foundation under one or more agreements.
+﻿// Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
 using System;
@@ -67,7 +67,7 @@ internal sealed class OpenAIAssistantChatClient : IChatClient
     /// <summary>
     /// Gets or sets an action that is invoked when a function call is made by the chat client.
     /// </summary>
-    public Action<string>? OnFunctionCall { get; set; }
+    public Action<IChatClient, string, IDictionary<string, object?>?>? OnFunctionCall { get; set; }
 
     /// <inheritdoc />
     public object? GetService(Type serviceType, object? serviceKey = null) =>

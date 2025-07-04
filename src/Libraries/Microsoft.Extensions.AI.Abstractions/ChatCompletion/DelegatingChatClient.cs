@@ -38,8 +38,8 @@ public class DelegatingChatClient : IChatClient
     /// <summary>
     /// Gets or sets an action that is invoked when a function call is made by the chat client.
     /// </summary>
-    public Action<string>? OnFunctionCall { get; set; }
-	
+    public Action<IChatClient, string, IDictionary<string, object?>?>? OnFunctionCall { get; set; }
+
     /// <summary>Gets the inner <see cref="IChatClient" />.</summary>
     protected IChatClient InnerClient { get; }
 

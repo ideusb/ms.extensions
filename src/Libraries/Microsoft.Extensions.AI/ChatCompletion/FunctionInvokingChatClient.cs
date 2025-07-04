@@ -707,8 +707,8 @@ public partial class FunctionInvokingChatClient : DelegatingChatClient
             return new(terminate: false, FunctionInvocationStatus.NotFound, callContent, result: null, exception: null);
         }
 
-        InnerClient.OnFunctionCall?.Invoke(callContent.Name);
-		
+        InnerClient.OnFunctionCall?.Invoke(InnerClient, callContent.Name, callContent.Arguments);
+
         FunctionInvocationContext context = new()
         {
             Function = aiFunction,

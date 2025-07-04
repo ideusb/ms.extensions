@@ -1,0 +1,13 @@
+在DelegatingChatClient 和 IChatClient 添加 public Action<IChatClient, string, IDictionary<string, object?>?>? OnFunctionCall { get; set; }
+然后修改FunctionInvokingChatClient.ProcessFunctionCallAsync方法，增加InnerClient.OnFunctionCall?.Invoke(aiFunction.Name);
+
+:: 1. 清理旧构建
+build.cmd -clean
+
+:: 2. 还原+构建Release版本
+build.cmd -configuration Release
+
+:: 3. 生成nupkg包（会自动构建）
+build.cmd -configuration Release -pack
+
+生成的nupkg包通常位于：artifacts\packages\Release\
