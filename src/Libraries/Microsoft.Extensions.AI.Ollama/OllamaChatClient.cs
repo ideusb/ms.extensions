@@ -77,6 +77,11 @@ public sealed class OllamaChatClient : IChatClient
         _metadata = new ChatClientMetadata("ollama", endpoint, modelId);
     }
 
+    /// <summary>
+    /// Gets or sets an action that is invoked when a function call is made by the chat client.
+    /// </summary>
+    public Action<string>? OnFunctionCall { get; set; }
+
     /// <summary>Gets or sets <see cref="JsonSerializerOptions"/> to use for any serialization activities related to tool call arguments and results.</summary>
     public JsonSerializerOptions ToolCallJsonSerializerOptions
     {

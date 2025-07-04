@@ -64,6 +64,11 @@ internal sealed class OpenAIAssistantChatClient : IChatClient
         _metadata = new("openai", providerUrl);
     }
 
+    /// <summary>
+    /// Gets or sets an action that is invoked when a function call is made by the chat client.
+    /// </summary>
+    public Action<string>? OnFunctionCall { get; set; }
+
     /// <inheritdoc />
     public object? GetService(Type serviceType, object? serviceKey = null) =>
         serviceType is null ? throw new ArgumentNullException(nameof(serviceType)) :

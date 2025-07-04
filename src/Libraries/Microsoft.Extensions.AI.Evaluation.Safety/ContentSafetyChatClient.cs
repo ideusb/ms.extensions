@@ -58,6 +58,11 @@ internal sealed class ContentSafetyChatClient : IChatClient
         _metadata = new ChatClientMetadata(providerName, originalMetadata?.ProviderUri, modelId);
     }
 
+    /// <summary>
+    /// Gets or sets an action that is invoked when a function call is made by the chat client.
+    /// </summary>
+    public Action<string>? OnFunctionCall { get; set; }
+
     public async Task<ChatResponse> GetResponseAsync(
         IEnumerable<ChatMessage> messages,
         ChatOptions? options = null,

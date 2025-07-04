@@ -67,4 +67,9 @@ public interface IChatClient : IDisposable
     /// <see cref="GetService"/> may be used to request it.
     /// </remarks>
     object? GetService(Type serviceType, object? serviceKey = null);
+	
+    /// <summary>
+    /// Gets or sets an action that is invoked when a function call is made by the chat client.
+    /// </summary>
+    Action<string>? OnFunctionCall { get; set; }
 }
