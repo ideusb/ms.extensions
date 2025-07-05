@@ -69,6 +69,11 @@ public interface IChatClient : IDisposable
     object? GetService(Type serviceType, object? serviceKey = null);
 
     /// <summary>
+    /// Gets or sets the name.
+    /// </summary>
+    string? Name { get; set; }
+
+    /// <summary>
     /// Gets or sets an action that is invoked when a function call is made by the chat client.
     /// </summary>
     Action<IChatClient, string, IDictionary<string, object?>?>? OnFunctionCall { get; set; }

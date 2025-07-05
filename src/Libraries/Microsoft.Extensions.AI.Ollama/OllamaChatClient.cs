@@ -78,6 +78,11 @@ public sealed class OllamaChatClient : IChatClient
     }
 
     /// <summary>
+    /// Gets or sets the name.
+    /// </summary>
+    public string? Name { get; set; }
+
+    /// <summary>
     /// Gets or sets an action that is invoked when a function call is made by the chat client.
     /// </summary>
     public Action<IChatClient, string, IDictionary<string, object?>?>? OnFunctionCall { get; set; }

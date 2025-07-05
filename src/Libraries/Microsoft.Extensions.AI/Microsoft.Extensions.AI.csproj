@@ -38,7 +38,7 @@
 
   <PropertyGroup>
     <InjectStringSyntaxAttributeOnLegacy>true</InjectStringSyntaxAttributeOnLegacy>
-    <Version>$(Version)-$(VersionSuffix)</Version>
+    <Version>9.8.0-hrg</Version>
   </PropertyGroup>
 
   <ItemGroup>

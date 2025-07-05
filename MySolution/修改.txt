@@ -11,3 +11,5 @@ build.cmd -configuration Release
 build.cmd -configuration Release -pack
 
 生成的nupkg包通常位于：artifacts\packages\Release\
+
+build.cmd -c Release -pack -properties /p:VersionSuffix=hrg
