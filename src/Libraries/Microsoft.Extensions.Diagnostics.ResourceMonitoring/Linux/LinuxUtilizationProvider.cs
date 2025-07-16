@@ -4,7 +4,6 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics.Metrics;
-using System.Linq;
 using System.Threading;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -17,6 +16,7 @@ internal sealed class LinuxUtilizationProvider : ISnapshotProvider
 {
     private const double One = 1.0;
     private const long Hundred = 100L;
+    private const double NanosecondsInSecond = 1_000_000_000;
 
     private readonly object _cpuLocker = new();
     private readonly object _memoryLocker = new();
@@ -37,7 +37,7 @@ internal sealed class LinuxUtilizationProvider : ISnapshotProvider
     private DateTimeOffset _refreshAfterMemory;
     private double _cpuPercentage = double.NaN;
     private double _lastCpuCoresUsed = double.NaN;
-    private double _memoryPercentage;
+    private ulong _memoryUsage;
     private long _previousCgroupCpuTime;
     private long _previousHostCpuTime;
     private long _previousCgroupCpuPeriodCounter;
@@ -82,13 +82,18 @@ internal sealed class LinuxUtilizationProvider : ISnapshotProvider
             (_previousCgroupCpuTime, _previousCgroupCpuPeriodCounter) = _parser.GetCgroupCpuUsageInNanosecondsAndCpuPeriodsV2();
 
             _ = meter.CreateObservableGauge(
-                ResourceUtilizationInstruments.ContainerCpuLimitUtilization,
-                () => GetMeasurementWithRetry(() => CpuUtilizationLimit(cpuLimit)),
-                "1");
+                name: ResourceUtilizationInstruments.ContainerCpuLimitUtilization,
+                observeValues: () => GetMeasurementWithRetry(() => CpuUtilizationLimit(cpuLimit)),
+                unit: "1");
 
             _ = meter.CreateObservableGauge(
                 name: ResourceUtilizationInstruments.ContainerCpuRequestUtilization,
                 observeValues: () => GetMeasurementWithRetry(() => CpuUtilizationRequest(cpuRequest)),
+                unit: "1");
+
+            _ = meter.CreateObservableGauge(
+                name: ResourceUtilizationInstruments.ContainerCpuTime,
+                observeValues: GetCpuTime,
                 unit: "1");
         }
         else
@@ -111,12 +116,18 @@ internal sealed class LinuxUtilizationProvider : ISnapshotProvider
 
         _ = meter.CreateObservableGauge(
             name: ResourceUtilizationInstruments.ContainerMemoryLimitUtilization,
-            observeValues: () => GetMeasurementWithRetry(() => MemoryUtilization()),
+            observeValues: () => GetMeasurementWithRetry(MemoryPercentage),
             unit: "1");
+
+        _ = meter.CreateObservableUpDownCounter(
+            name: ResourceUtilizationInstruments.ContainerMemoryUsage,
+            observeValues: () => GetMeasurementWithRetry(() => (long)MemoryUsage()),
+            unit: "By",
+            description: "Memory usage of the container.");
 
         _ = meter.CreateObservableGauge(
             name: ResourceUtilizationInstruments.ProcessMemoryUtilization,
-            observeValues: () => GetMeasurementWithRetry(() => MemoryUtilization()),
+            observeValues: () => GetMeasurementWithRetry(MemoryPercentage),
             unit: "1");
 
         // cpuRequest is a CPU request (aka guaranteed number of CPU units) for pod, for host its 1 core
@@ -211,7 +222,7 @@ internal sealed class LinuxUtilizationProvider : ISnapshotProvider
         return _cpuPercentage;
     }
 
-    public double MemoryUtilization()
+    public ulong MemoryUsage()
     {
         DateTimeOffset now = _timeProvider.GetUtcNow();
 
@@ -219,26 +230,24 @@ internal sealed class LinuxUtilizationProvider : ISnapshotProvider
         {
             if (now < _refreshAfterMemory)
             {
-                return _memoryPercentage;
+                return _memoryUsage;
             }
         }
 
-        ulong memoryUsed = _parser.GetMemoryUsageInBytes();
+        ulong memoryUsage = _parser.GetMemoryUsageInBytes();
 
         lock (_memoryLocker)
         {
             if (now >= _refreshAfterMemory)
             {
-                double memoryPercentage = Math.Min(One, (double)memoryUsed / _memoryLimit);
-
-                _memoryPercentage = memoryPercentage;
+                _memoryUsage = memoryUsage;
                 _refreshAfterMemory = now.Add(_memoryRefreshInterval);
             }
         }
 
-        _logger.MemoryUsageData(memoryUsed, _memoryLimit, _memoryPercentage);
+        _logger.MemoryUsageData(_memoryUsage);
 
-        return _memoryPercentage;
+        return _memoryUsage;
     }
 
     /// <remarks>
@@ -259,23 +268,42 @@ internal sealed class LinuxUtilizationProvider : ISnapshotProvider
             memoryUsageInBytes: memoryUsed);
     }
 
-    private IEnumerable<Measurement<double>> GetMeasurementWithRetry(Func<double> func)
+    private double MemoryPercentage()
     {
+        ulong memoryUsage = MemoryUsage();
+        double memoryPercentage = Math.Min(One, (double)memoryUsage / _memoryLimit);
+
+        _logger.MemoryPercentageData(memoryUsage, _memoryLimit, memoryPercentage);
+        return memoryPercentage;
+    }
+
+    private Measurement<T>[] GetMeasurementWithRetry<T>(Func<T> func)
+        where T : struct
+    {
+        if (!TryGetValueWithRetry(func, out T value))
+        {
+            return Array.Empty<Measurement<T>>();
+        }
+
+        return new[] { new Measurement<T>(value) };
+    }
+
+    private bool TryGetValueWithRetry<T>(Func<T> func, out T value)
+        where T : struct
+    {
+        value = default;
         if (Volatile.Read(ref _measurementsUnavailable) == 1 &&
             _timeProvider.GetUtcNow() - _lastFailure < _retryInterval)
         {
-            return Enumerable.Empty<Measurement<double>>();
+            return false;
         }
 
         try
         {
-            double result = func();
-            if (Volatile.Read(ref _measurementsUnavailable) == 1)
-            {
-                _ = Interlocked.Exchange(ref _measurementsUnavailable, 0);
-            }
+            value = func();
+            _ = Interlocked.CompareExchange(ref _measurementsUnavailable, 0, 1);
 
-            return new[] { new Measurement<double>(result) };
+            return true;
         }
         catch (Exception ex) when (
             ex is System.IO.FileNotFoundException ||
@@ -285,7 +313,7 @@ internal sealed class LinuxUtilizationProvider : ISnapshotProvider
             _lastFailure = _timeProvider.GetUtcNow();
             _ = Interlocked.Exchange(ref _measurementsUnavailable, 1);
 
-            return Enumerable.Empty<Measurement<double>>();
+            return false;
         }
     }
 
@@ -293,4 +321,17 @@ internal sealed class LinuxUtilizationProvider : ISnapshotProvider
     // due to the fact that the calculation itself is not an atomic operation:
     private double CpuUtilizationRequest(double cpuRequest) => Math.Min(One, CpuUtilizationV2() / cpuRequest);
     private double CpuUtilizationLimit(double cpuLimit) => Math.Min(One, CpuUtilizationV2() / cpuLimit);
+
+    private IEnumerable<Measurement<double>> GetCpuTime()
+    {
+        if (TryGetValueWithRetry(_parser.GetHostCpuUsageInNanoseconds, out long systemCpuTime))
+        {
+            yield return new Measurement<double>(systemCpuTime / NanosecondsInSecond, [new KeyValuePair<string, object?>("cpu.mode", "system")]);
+        }
+
+        if (TryGetValueWithRetry(CpuUtilizationV2, out double userCpuTime))
+        {
+            yield return new Measurement<double>(userCpuTime, [new KeyValuePair<string, object?>("cpu.mode", "user")]);
+        }
+    }
 }

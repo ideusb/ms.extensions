@@ -80,7 +80,7 @@ internal sealed class OpenAIChatClient : IChatClient
     {
         _ = Throw.IfNull(messages);
 
-        var openAIChatMessages = ToOpenAIChatMessages(messages, options, AIJsonUtilities.DefaultOptions);
+        var openAIChatMessages = ToOpenAIChatMessages(messages, options);
         var openAIOptions = ToOpenAIOptions(options);
 
         // Make the call to OpenAI.
@@ -95,13 +95,13 @@ internal sealed class OpenAIChatClient : IChatClient
     {
         _ = Throw.IfNull(messages);
 
-        var openAIChatMessages = ToOpenAIChatMessages(messages, options, AIJsonUtilities.DefaultOptions);
+        var openAIChatMessages = ToOpenAIChatMessages(messages, options);
         var openAIOptions = ToOpenAIOptions(options);
 
         // Make the call to OpenAI.
         var chatCompletionUpdates = _chatClient.CompleteChatStreamingAsync(openAIChatMessages, openAIOptions, cancellationToken);
 
-        return FromOpenAIStreamingChatCompletionAsync(chatCompletionUpdates, cancellationToken);
+        return FromOpenAIStreamingChatCompletionAsync(chatCompletionUpdates, openAIOptions, cancellationToken);
     }
 
     /// <inheritdoc />
@@ -125,7 +125,7 @@ internal sealed class OpenAIChatClient : IChatClient
     }
 
     /// <summary>Converts an Extensions chat message enumerable to an OpenAI chat message enumerable.</summary>
-    private static IEnumerable<OpenAI.Chat.ChatMessage> ToOpenAIChatMessages(IEnumerable<ChatMessage> inputs, ChatOptions? chatOptions, JsonSerializerOptions jsonOptions)
+    internal static IEnumerable<OpenAI.Chat.ChatMessage> ToOpenAIChatMessages(IEnumerable<ChatMessage> inputs, ChatOptions? chatOptions)
     {
         // Maps all of the M.E.AI types to the corresponding OpenAI types.
         // Unrecognized or non-processable content is ignored.
@@ -158,7 +158,7 @@ internal sealed class OpenAIChatClient : IChatClient
                         {
                             try
                             {
-                                result = JsonSerializer.Serialize(resultContent.Result, jsonOptions.GetTypeInfo(typeof(object)));
+                                result = JsonSerializer.Serialize(resultContent.Result, AIJsonUtilities.DefaultOptions.GetTypeInfo(typeof(object)));
                             }
                             catch (NotSupportedException)
                             {
@@ -186,7 +186,7 @@ internal sealed class OpenAIChatClient : IChatClient
                         case FunctionCallContent fc:
                             (toolCalls ??= []).Add(
                                 ChatToolCall.CreateFunctionToolCall(fc.CallId, fc.Name, new(JsonSerializer.SerializeToUtf8Bytes(
-                                    fc.Arguments, jsonOptions.GetTypeInfo(typeof(IDictionary<string, object?>))))));
+                                    fc.Arguments, AIJsonUtilities.DefaultOptions.GetTypeInfo(typeof(IDictionary<string, object?>))))));
                             break;
 
                         default:
@@ -300,7 +300,8 @@ internal sealed class OpenAIChatClient : IChatClient
 
     private static async IAsyncEnumerable<ChatResponseUpdate> FromOpenAIStreamingChatCompletionAsync(
         IAsyncEnumerable<StreamingChatCompletionUpdate> updates,
-        [EnumeratorCancellation] CancellationToken cancellationToken = default)
+        ChatCompletionOptions? options,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
     {
         Dictionary<int, FunctionCallInfo>? functionCallInfos = null;
         ChatRole? streamedRole = null;
@@ -344,6 +345,14 @@ internal sealed class OpenAIChatClient : IChatClient
                 }
             }
 
+            if (update.OutputAudioUpdate is { } audioUpdate)
+            {
+                responseUpdate.Contents.Add(new DataContent(audioUpdate.AudioBytesUpdate.ToMemory(), GetOutputAudioMimeType(options))
+                {
+                    RawRepresentation = audioUpdate,
+                });
+            }
+
             // Transfer over refusal updates.
             if (update.RefusalUpdate is not null)
             {
@@ -373,8 +382,10 @@ internal sealed class OpenAIChatClient : IChatClient
             // Transfer over usage updates.
             if (update.Usage is ChatTokenUsage tokenUsage)
             {
-                var usageDetails = FromOpenAIUsage(tokenUsage);
-                responseUpdate.Contents.Add(new UsageContent(usageDetails));
+                responseUpdate.Contents.Add(new UsageContent(FromOpenAIUsage(tokenUsage))
+                {
+                    RawRepresentation = tokenUsage,
+                });
             }
 
             // Now yield the item.
@@ -418,6 +429,17 @@ internal sealed class OpenAIChatClient : IChatClient
         }
     }
 
+    private static string GetOutputAudioMimeType(ChatCompletionOptions? options) =>
+        options?.AudioOptions?.OutputAudioFormat.ToString()?.ToLowerInvariant() switch
+        {
+            "opus" => "audio/opus",
+            "aac" => "audio/aac",
+            "flac" => "audio/flac",
+            "wav" => "audio/wav",
+            "pcm" => "audio/pcm",
+            "mp3" or _ => "audio/mpeg",
+        };
+
     private static ChatResponse FromOpenAIChatCompletion(ChatCompletion openAICompletion, ChatOptions? options, ChatCompletionOptions chatCompletionOptions)
     {
         _ = Throw.IfNull(openAICompletion);
@@ -442,19 +464,10 @@ internal sealed class OpenAIChatClient : IChatClient
         // Output audio is handled separately from message content parts.
         if (openAICompletion.OutputAudio is ChatOutputAudio audio)
         {
-            string mimeType = chatCompletionOptions?.AudioOptions?.OutputAudioFormat.ToString()?.ToLowerInvariant() switch
+            returnMessage.Contents.Add(new DataContent(audio.AudioBytes.ToMemory(), GetOutputAudioMimeType(chatCompletionOptions))
             {
-                "opus" => "audio/opus",
-                "aac" => "audio/aac",
-                "flac" => "audio/flac",
-                "wav" => "audio/wav",
-                "pcm" => "audio/pcm",
-                "mp3" or _ => "audio/mpeg",
-            };
-
-            var dc = new DataContent(audio.AudioBytes.ToMemory(), mimeType);
-
-            returnMessage.Contents.Add(dc);
+                RawRepresentation = audio,
+            });
         }
 
         // Also manufacture function calling content items from any tool calls in the response.
@@ -515,9 +528,7 @@ internal sealed class OpenAIChatClient : IChatClient
         result.PresencePenalty ??= options.PresencePenalty;
         result.Temperature ??= options.Temperature;
         result.AllowParallelToolCalls ??= options.AllowMultipleToolCalls;
-#pragma warning disable OPENAI001 // Type is for evaluation purposes only and is subject to change or removal in future updates.
         result.Seed ??= options.Seed;
-#pragma warning restore OPENAI001
 
         if (options.StopSequences is { Count: > 0 } stopSequences)
         {
